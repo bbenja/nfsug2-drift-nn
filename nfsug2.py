@@ -42,6 +42,7 @@ class CustomEnv(gym.Env):
 
     def reset(self):
         state = get_car_diag()
+        reset_race()
         return state
 
     def render(self):
@@ -234,7 +235,6 @@ env = CustomEnv()
 if __name__ == "__main__":
     # window = win32gui.FindWindow(None, "NFS Underground 2")
     # win32gui.SetForegroundWindow(window)
-    reset_race()
     print("The observation space: {}".format(env.observation_space))
     quit()
     dqn = build_agent(build_model(2, 3), 3)
