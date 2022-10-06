@@ -1,6 +1,6 @@
 from PIL import Image, ImageGrab, ImageFilter, ImageOps, ImageEnhance
-from keys import PressKey, ReleaseKey, W, A, S, D, SHIFT, SPACE, ESC, ENTER, DOWN
-from time import sleep
+from keys import PressKey, ReleaseKey, W, A, S, D, SHIFT, SPACE, ESC, ENTER, DOWN, RIGHT, LEFT
+from time import sleep, perf_counter
 import pygetwindow
 import pyautogui
 import pytesseract
@@ -12,10 +12,71 @@ from pymem import *
 from pymem.process import *
 from pymem.ptypes import RemotePointer
 import keyboard
+import win32gui
+from random import choice
+import gym
+from gym import spaces
+
+class CustomEnv(gym.Env):
+    metadata = {"render.modes": ["human"]}
+
+    def __init__(self):
+        super(CustomEnv, self).__init__()
+        self.action_space = spaces.Discrete(3)
+        self.observation_space = spaces.Box(0.0, 50.0, shape=(2, 1))
+        self.info = {"speed": 0, "angle": 0}
+
+        # self.states = 2
+        # self.actions = 3
+
+
+    def step(self, action):
+        control_car(action)
+
+        reward = get_score()
+
+        state = get_car_diag()
+        ded = False
+
+        return state, reward, ded, self.info
+
+    def reset(self):
+        state = get_car_diag()
+        return state
+
+    def render(self):
+        pass
+
+    def close(self):
+        pass
+
+
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Flatten
+from tensorflow.keras.optimizers import Adam
+from rl.agents import DQNAgent
+from rl.policy import BoltzmannQPolicy
+from rl.memory import SequentialMemory
+
+def build_model(states, actions):
+    model = Sequential()
+    model.add(Flatten(input_shape=(1, states)))
+    model.add(Dense(24, activation="relu"))
+    model.add(Dense(24, activation="relu"))
+    model.add(Dense(actions, activation="linear"))
+    return model
+
+def build_agent(model, actions):
+    policy = BoltzmannQPolicy()
+    memory = SequentialMemory(limit=50000, window_length=1)
+    dqn = DQNAgent(model=model, memory=memory, policy=policy,
+                   nb_actions=actions, nb_steps_warmup=100, target_model_update=1e-2)
+    return dqn
 
 
 config = r"--psm 8 --oem 1"
 path = "C:\\Users\\bbenja\\Desktop\\nfsug.jpg"
+# W = 0x11; A = 0x1E; S = 0x1F;D = 0x20
 
 
 def get_window_image():
@@ -60,17 +121,81 @@ def get_data_from_image(img):
 
     detected_total = pytesseract.image_to_string(total, config=config)
     detected_angle = pytesseract.image_to_string(angle, config=config)
-    # detected_total = sub("\D", "", detected_total)
     detected_total = "".join(i for i in detected_total if i in "0123456789")
     detected_angle = sub("\D", "", detected_angle)
     return detected_total, detected_angle
 
-actions = [W, A, S, D, SPACE]
+actions_array = [A, SPACE, D]
 actions_history = []
-key_pause = 0.3
+keypress_pause = 0.3
+highscore, iteration, episode = 0, 0, 0
+states = 17
+active_state = 0
+Q = 1000 * np.random.rand(states, len(actions_array))
+lr = 0.5
+y = 0.5
+
+def control_car(chosen_action):
+    for action in actions_array:
+        ReleaseKey(action)
+    PressKey(W)
+    PressKey(actions_array[chosen_action])
+    print(actions_array[chosen_action])
 
 
-mem = Pymem("SPEED2.EXE")
+def run_q_algorithm():
+    global active_state, highscore, episode, actions_history
+    chosen_action = np.argmax(Q[active_state, :])
+    actions_history.append(chosen_action)
+    print(f"state: {active_state}\tvalue: {Q[active_state, chosen_action]}\taction: {chosen_action}")
+
+    control_car(chosen_action)
+    reward = update_reward()
+    Q[active_state, chosen_action] = (1 - lr) * Q[active_state, chosen_action] + lr * (
+                highscore + y * np.max(Q[(active_state + 1), :]))
+    # print(Q)
+    if active_state + 2 != states:
+        active_state += 1
+    else:
+        reset_race()
+        episode += 1
+        print(f"EP: {episode}")
+        np.savetxt("qmatrix" + str(highscore) + ".out", Q, delimiter=',')
+        np.savetxt("actions_history" + str(highscore) + ".out", actions_history, delimiter=',')
+        active_state = 0
+        actions_history = []
+        highscore = 0
+
+def update_reward():
+    global highscore
+    highscore = mem.read_float((mem.base_address + 0x464650))
+    for i in range(len(actions_history)):
+        Q[i][actions_history[i]] += highscore
+
+def reset_race():
+    #ESC, RIGHT, ENTER, LEFT, ENTER
+    PressKey(ESC)
+    sleep(0.1)
+    ReleaseKey(ESC)
+
+    PressKey(RIGHT)
+    sleep(0.1)
+    ReleaseKey(RIGHT)
+
+    PressKey(ENTER)
+    sleep(0.1)
+    ReleaseKey(ENTER)
+
+    PressKey(LEFT)
+    sleep(0.1)
+    ReleaseKey(LEFT)
+
+    PressKey(ENTER)
+    sleep(0.1)
+    ReleaseKey(ENTER)
+
+    sleep(3)
+
 
 def getPointerAddress(base, offsets):
     remote_pointer = RemotePointer(mem.process_handle, base)
@@ -80,22 +205,59 @@ def getPointerAddress(base, offsets):
         else:
             return remote_pointer.value + offset
 
+speed_offsets = [0x42C]
+angle_offsets = [0x214, 0x20, 0x394, 0xC8C, 0x4, 0x0, 0x6C]
+
+def get_car_diag():
+    speed = mem.read_float(getPointerAddress(mem.base_address + 0x0049CCF8, speed_offsets))
+    angle = mem.read_int(getPointerAddress(mem.base_address + 0x004B4754, angle_offsets))
+    return (speed, angle)
+
+def get_score():
+    total = mem.read_float((mem.base_address + 0x464650))
+    return total
+
+def print_action(action):
+    bindings = {"W": 0x11, "A": 0x1E,
+                "S": 0x1F, "D": 0x20,
+                "ESC": 0x01, "ENTER": 0x1C,
+                "DOWN": 0xD0, "ONE": 0x02,
+                "CTRL": 0x1D, "SHIFT": 0x2A,
+                "SPACE": 0x39}
+    return list(bindings.keys())[list(bindings.values()).index(action)]
+
+mem = Pymem("SPEED2.EXE")
+# Instantiate the env
+env = CustomEnv()
+
 
 if __name__ == "__main__":
-    while (True):
-        # img = get_window_image()
-        # data = get_data_from_image(img)
-        # print(data)
+    # window = win32gui.FindWindow(None, "NFS Underground 2")
+    # win32gui.SetForegroundWindow(window)
+    reset_race()
+    print("The observation space: {}".format(env.observation_space))
+    quit()
+    dqn = build_agent(build_model(2, 3), 3)
+    dqn.compile(Adam(1e-3), metrics=["mae"])
+    dqn.fit(env, nb_steps=50000, visualize=False, verbose=1)
 
-        speed_offsets = [0x42C]
-        speed = mem.read_float(getPointerAddress(mem.base_address + 0x0049CCF8, speed_offsets))
-        angle_offsets = [0x214, 0x20, 0x394, 0xC8C, 0x4, 0x0, 0x6C]
-        angle = mem.read_int(getPointerAddress(mem.base_address + 0x004B4754, angle_offsets))
-        total = mem.read_float((mem.base_address + 0x464650))
-
-        print(f"total: {total}\tangle: {angle}\tspeed: {round(speed*3.6)}")
-
-
+    for _ in range(1000):
+        action = env.action_space.sample()
+        data = env.step(action)
+        print(data)
+    # while (True):
+    #     PressKey(W)
+    #     # get state
+    #     state = get_car_diag()
+    #     # predict based on the state
+    #     action = choice(actions_array)
+    #     # insert predicted action into the game
+    #
+    #     sleep(keypress_pause)
+    #     ReleaseKey(action)
+    #     # check the highscore and calculate the reward
+    #     highscore = get_score()
+    #     print(f"{round(state[0])}, {state[1]}\t-> {print_action(action)}\t-> {highscore}")
 
         key = cv2.waitKey(1)
         if key == 27:
