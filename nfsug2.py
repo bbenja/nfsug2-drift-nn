@@ -15,30 +15,36 @@ import keyboard
 import win32gui
 from random import choice
 import gym
-from gym import spaces
+from gym.spaces import Discrete, Box
 
 class CustomEnv(gym.Env):
     metadata = {"render.modes": ["human"]}
 
     def __init__(self):
         super(CustomEnv, self).__init__()
-        self.action_space = spaces.Discrete(3)
-        self.observation_space = spaces.Box(0.0, 50.0, shape=(2, 1))
-        self.info = {"speed": 0, "angle": 0}
+        self.action_space = Discrete(3)     #A, SPACE, D
+        self.observation_space = Box(0.0, 50.0, shape=(2,))
 
         # self.states = 2
         # self.actions = 3
 
 
     def step(self, action):
+        # Apply action
         control_car(action)
 
+        # Calc reward
         reward = get_score()
 
+        # Get state
         state = get_car_diag()
-        ded = False
 
-        return state, reward, ded, self.info
+        # Calculate if done
+        done = False
+
+        info = {}
+
+        return state, reward, done, info
 
     def reset(self):
         state = get_car_diag()
@@ -236,15 +242,32 @@ if __name__ == "__main__":
     # window = win32gui.FindWindow(None, "NFS Underground 2")
     # win32gui.SetForegroundWindow(window)
     print("The observation space: {}".format(env.observation_space))
-    quit()
-    dqn = build_agent(build_model(2, 3), 3)
-    dqn.compile(Adam(1e-3), metrics=["mae"])
-    dqn.fit(env, nb_steps=50000, visualize=False, verbose=1)
+    for _ in range(5):
+        print(env.observation_space.sample())
 
-    for _ in range(1000):
-        action = env.action_space.sample()
-        data = env.step(action)
-        print(data)
+
+    model = build_model(2, 3)
+    # dqn = build_agent(model, 3)
+    # dqn.compile(Adam(1e-3), metrics=["mae"])
+    # dqn.fit(env, nb_steps=5000, visualize=False, verbose=1)
+    #
+    # dqn.save_weights("dqn", overwrite=True)
+    #
+    reset_race()
+    model.load_weights("dqn")
+    for _ in range(50):
+        speed, angle = get_car_diag()
+        data = [speed, angle]
+        data = np.expand_dims(data, -1)
+        action = model.predict(data)
+        print(action)
+
+
+    # for _ in range(1000):
+    #     action = env.action_space.sample()
+    #     data = env.step(action)
+    #     print(data)
+
     # while (True):
     #     PressKey(W)
     #     # get state
@@ -259,6 +282,6 @@ if __name__ == "__main__":
     #     highscore = get_score()
     #     print(f"{round(state[0])}, {state[1]}\t-> {print_action(action)}\t-> {highscore}")
 
-        key = cv2.waitKey(1)
-        if key == 27:
-            break
+        # key = cv2.waitKey(1)
+        # if key == 27:
+        #     break
