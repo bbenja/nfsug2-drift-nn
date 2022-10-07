@@ -56,58 +56,80 @@ class CustomEnv(gym.Env):
 
     def __init__(self):
         super(CustomEnv, self).__init__()
+        self.img_size = (350, 350)
         self.action_space = Discrete(len(actions_array))     #A, SPACE, D
-        self.observation_space = Box(np.zeros((800, 350), dtype=np.uint8),
-                                     np.full((800, 350), 255, dtype=np.uint8),
-                                     [800, 350], dtype=np.uint8)
-        print(self.observation_space.shape)
-        self.state = get_car_diag()
-        print(self.state)
+        self.observation_space = Box(np.zeros(self.img_size, dtype=np.uint8),
+                                     np.full(self.img_size, 255, dtype=np.uint8),
+                                     [self.img_size[0], self.img_size[1]],
+                                     dtype=np.uint8)
+        self.state = [0.0, 0.0]
+        self.action_history = []
+        self.score = get_score()
+        self.done = False
 
 
     def step(self, action):
+        reward = -25
+        try:
+            if self.action_history[-20:].count(action) > 10:
+                reward -= 200
+        except:
+            pass
+
+        self.action_history.append(action)
         control_car(action)
-        self.state = get_car_diag()
-        speed, angle = self.state
+        speed, angle = get_car_diag()
         speed *= 3.6
-        reward = 0
-        if angle != 0:
-            reward += 5 * angle
-        else:
-            reward -= 100
-        if speed > 20.0:
-            reward += 10 * speed
-        else:
-            reward -= 200
 
-        # reward += get_score()
+        reward += speed * angle
 
-        done = False
+        # if speed > 20.0:
+        #     reward += 10 * speed
+        #     if angle != 0:
+        #         reward += 15 * angle
+        #     else:
+        #         reward -= 100
+        # else:
+        #     reward -= 201
+
+        if speed < self.state[0] - 20:
+            reward -= 1000
+            self.done = True
+        self.state = [speed, angle]
+
+        score = get_score()
+        reward += (score - self.score)
+        self.score = score
+
 
         info = {}
 
         obs = get_car_from_image(get_window_image())
-        # cv2.imwrite("collision.jpg", obs)
 
-        # col = obs[220:, :, :]
-        #
+        col = obs[220:, :, :]
+
+        print(f"\n{action}, {reward}, {self.state}")
+
         # mr, mg, mb = col.mean(axis=0).mean(axis=0)
-        # # 48.57839643 60.12598929 62.53146071
-        # # 53.32874286 66.24059286 68.90934643
-        # if mr > 48 and mg > 60 and mb > 62:
-        #     reward -= 200
-        #     print(f"\ncol, {reward}")
 
 
-        # cv2.imshow("obs", cv2.resize(obs, (200, 200)))
-        # cv2.waitKey(1)
         obs = np.reshape(cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY), (350, 800))
-        return obs, reward, done, info
+
+
+        obs = cv2.resize(obs, (self.observation_space.shape[1],
+                               self.observation_space.shape[0]))
+        # cv2.imshow("obs", obs)
+        # cv2.waitKey(1)
+        return obs, reward, self.done, info
 
     def reset(self):
         reset_race()
+        self.state = [0, 0]
+        self.done = False
         obs = get_car_from_image(get_window_image())
         obs = np.reshape(cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY), (350, 800))
+        obs = cv2.resize(obs, (self.observation_space.shape[1],
+                               self.observation_space.shape[0]))
         return obs
 
     def render(self):
@@ -220,12 +242,13 @@ def get_score():
     return total
 
 def print_action(action):
-    bindings = {"0x11": "W", "0x1e": "A",
-                "0x1f": "S", "0x20": "D",
-                "0x01": "ESC", "0x1c": "ENT",
-                "0xd0": "DOWN", "0x1d": "CTRL",
-                "0x2a": "SHIFT", "0x39": "SPACE"}
-    return bindings[str(hex(action))]
+    # bindings = {"0x11": "W", "0x1e": "A",
+    #             "0x1f": "S", "0x20": "D",
+    #             "0x2": "D",
+    #             "0x01": "ESC", "0x1c": "ENT",
+    #             "0xd0": "DOWN", "0x1d": "CTRL",
+    #             "0x2a": "SHIFT", "0x39": "SPACE"}
+    return actions_array[action]
 
 
 
@@ -235,7 +258,7 @@ if __name__ == "__main__":
     height, width = env.observation_space.shape
     actions = env.action_space.n
 
-    # obs, _, _, _ = env.step(1)
+    # obs, _, _, _ = env.step(0)
 
     # window = win32gui.FindWindow(None, "NFS Underground 2")
     # win32gui.SetForegroundWindow(window)
@@ -246,7 +269,7 @@ if __name__ == "__main__":
     dqn = build_agent(model, actions)
     dqn.compile(Adam(1e-3))
 
-    dqn.fit(env, nb_steps=6000, visualize=False,
+    dqn.fit(env, nb_steps=9000, visualize=False,
             verbose=1, nb_max_episode_steps=300)
     dqn.save_weights("./nfsug2-drift-nn/saves/dqn", overwrite=True)
     model.load_weights("./nfsug2-drift-nn/saves/dqn")
