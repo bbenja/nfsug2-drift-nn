@@ -17,7 +17,7 @@ from random import choice
 import gym
 from gym.spaces import Discrete, Box
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Flatten, Conv2D
+from tensorflow.keras.layers import Dense, Flatten, Conv2D, GlobalAveragePooling2D
 from tensorflow.keras.optimizers import Adam
 from rl.agents import DQNAgent
 from rl.policy import BoltzmannQPolicy, LinearAnnealedPolicy, EpsGreedyQPolicy
@@ -26,11 +26,15 @@ from rl.memory import SequentialMemory
 
 def build_model(w, h, actions):
     model = Sequential()
-    model.add(Conv2D(32, (4, 4), strides=(2, 2),
+    model.add(Conv2D(32, 5, strides=(2, 2),
                      activation="relu", padding="same",
-                     input_shape=(w, h, 1)))
-    model.add(Flatten())
-    model.add(Dense(24, activation="relu"))
+                     input_shape=(1, w, h)))
+    model.add(Conv2D(64, 8,
+                     activation="relu", padding="same",
+                     input_shape=(1, w, h)))
+    model.add(GlobalAveragePooling2D())
+    model.add(Dense(64, activation="elu"))
+    model.add(Dense(32, activation="elu"))
     model.add(Dense(actions, activation="linear"))
     return model
 
@@ -41,8 +45,8 @@ def build_agent(model, actions):
                                   value_test=.2, nb_steps=10000)
     memory = SequentialMemory(limit=1000, window_length=1)
     dqn = DQNAgent(model=model, policy=policy, memory=memory,
-                   nb_actions=actions, nb_steps_warmup=10000)
-                   # enable_dueling_network=True, dueling_type="avg")
+                   nb_actions=actions, nb_steps_warmup=10000,
+                   enable_dueling_network=True, dueling_type="avg")
     return dqn
 
 
@@ -52,7 +56,9 @@ class CustomEnv(gym.Env):
     def __init__(self):
         super(CustomEnv, self).__init__()
         self.action_space = Discrete(3)     #A, SPACE, D
-        self.observation_space = Box(0, 255, [800, 350, 1], dtype=np.uint8)
+        self.observation_space = Box(np.zeros((800, 350), dtype=np.uint8),
+                                     np.full((800, 350), 255, dtype=np.uint8),
+                                     [800, 350], dtype=np.uint8)
         print(self.observation_space.shape)
         self.state = get_car_diag()
         print(self.state)
@@ -61,25 +67,29 @@ class CustomEnv(gym.Env):
     def step(self, action):
         control_car(action)
         self.state = get_car_diag()
-
+        speed, angle = self.state
         reward = 0
-        if self.state[1] != 0:
-            reward += int(self.state[1])
-        reward += get_score()
+        if angle == 0:
+            reward -= 5
+        if speed < 20.0:
+            reward -= 10
+        reward += (angle + speed)
+
+        # reward += get_score()
 
         done = False
 
         info = {}
 
-        obs = np.reshape(get_car_from_image(get_window_image()), (350, 800, 1))
-        print(obs.shape)
+        obs = np.reshape(get_car_from_image(get_window_image()), (350, 800))
+        cv2.imshow("frame", cv2.resize(obs, (300, 300)))
+        cv2.waitKey(1)
         #return self.state, reward, done, info
         return obs, reward, done, info
 
     def reset(self):
         reset_race()
-        obs = np.reshape(get_car_from_image(get_window_image()), (350, 800, 1))
-        print(obs.shape)
+        obs = np.reshape(get_car_from_image(get_window_image()), (350, 800))
         return obs
 
     def render(self):
@@ -145,7 +155,7 @@ def control_car(chosen_action):
         ReleaseKey(action)
     PressKey(W)
     PressKey(actions_array[chosen_action])
-    print(print_action(actions_array[chosen_action]))
+    # print(print_action(actions_array[chosen_action]))
 
 
 def reset_race():
@@ -204,8 +214,7 @@ def print_action(action):
 
 if __name__ == "__main__":
     env = CustomEnv()
-    obs = env.reset()
-    height, width, ch = env.observation_space.shape
+    height, width = env.observation_space.shape
     actions = env.action_space.n
     # window = win32gui.FindWindow(None, "NFS Underground 2")
     # win32gui.SetForegroundWindow(window)
@@ -213,14 +222,12 @@ if __name__ == "__main__":
 
     model = build_model(width, height, actions)
     dqn = build_agent(model, actions)
-    dqn.compile(Adam(1e-4))
+    dqn.compile(Adam(1e-3))
 
-    dqn.fit(env, nb_steps=10000, visualize=False, verbose=2)
+    dqn.fit(env, nb_steps=10000, visualize=False, verbose=1, nb_max_episode_steps=500)
     dqn.save_weights("dqn", overwrite=True)
-
     model.load_weights("dqn")
-
-    dqn.test(env, nb_max_episode_steps=3000, visualize=False)
+    dqn.test(env, nb_max_episode_steps=3000, visualize=False, verbose=1)
 
 
 
