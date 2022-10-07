@@ -71,8 +71,10 @@ class CustomEnv(gym.Env):
         speed, angle = self.state
         speed *= 3.6
         reward = 0
-        if angle == 0:
-            reward -= 5
+        if angle != 0:
+            reward += 5 * angle
+        else:
+            reward -= 100
         if speed > 20.0:
             reward += 10 * speed
         else:
@@ -246,8 +248,8 @@ if __name__ == "__main__":
 
     dqn.fit(env, nb_steps=6000, visualize=False,
             verbose=1, nb_max_episode_steps=300)
-    dqn.save_weights("./nfsug2-drift-nn/dqn", overwrite=True)
-    model.load_weights("./nfsug2-drift-nn/dqn")
+    dqn.save_weights("./nfsug2-drift-nn/saves/dqn", overwrite=True)
+    model.load_weights("./nfsug2-drift-nn/saves/dqn")
     dqn.test(env, nb_max_episode_steps=3000, visualize=False, verbose=0)
 
 
