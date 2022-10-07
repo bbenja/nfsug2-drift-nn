@@ -40,13 +40,14 @@ def build_model(w, h, actions):
 
 
 def build_agent(model, actions):
-    policy = LinearAnnealedPolicy(EpsGreedyQPolicy(), attr="eps",
-                                  value_max=1., value_min=.1,
-                                  value_test=.2, nb_steps=10000)
+    # policy = LinearAnnealedPolicy(EpsGreedyQPolicy(), attr="eps",
+    #                               value_max=50., value_min=-50.,
+    #                               value_test=1., nb_steps=10000)
+    policy = BoltzmannQPolicy()
     memory = SequentialMemory(limit=1000, window_length=1)
     dqn = DQNAgent(model=model, policy=policy, memory=memory,
-                   nb_actions=actions, nb_steps_warmup=10000,
-                   enable_dueling_network=True, dueling_type="avg")
+                   nb_actions=actions, nb_steps_warmup=10000)
+                   # enable_dueling_network=True, dueling_type="avg")
     return dqn
 
 
@@ -55,7 +56,7 @@ class CustomEnv(gym.Env):
 
     def __init__(self):
         super(CustomEnv, self).__init__()
-        self.action_space = Discrete(3)     #A, SPACE, D
+        self.action_space = Discrete(len(actions_array))     #A, SPACE, D
         self.observation_space = Box(np.zeros((800, 350), dtype=np.uint8),
                                      np.full((800, 350), 255, dtype=np.uint8),
                                      [800, 350], dtype=np.uint8)
@@ -68,12 +69,14 @@ class CustomEnv(gym.Env):
         control_car(action)
         self.state = get_car_diag()
         speed, angle = self.state
+        speed *= 3.6
         reward = 0
         if angle == 0:
             reward -= 5
-        if speed < 20.0:
-            reward -= 10
-        reward += (angle + speed)
+        if speed > 20.0:
+            reward += 10 * speed
+        else:
+            reward -= 200
 
         # reward += get_score()
 
@@ -81,15 +84,28 @@ class CustomEnv(gym.Env):
 
         info = {}
 
-        obs = np.reshape(get_car_from_image(get_window_image()), (350, 800))
-        cv2.imshow("frame", cv2.resize(obs, (300, 300)))
-        cv2.waitKey(1)
-        #return self.state, reward, done, info
+        obs = get_car_from_image(get_window_image())
+        # cv2.imwrite("collision.jpg", obs)
+
+        # col = obs[220:, :, :]
+        #
+        # mr, mg, mb = col.mean(axis=0).mean(axis=0)
+        # # 48.57839643 60.12598929 62.53146071
+        # # 53.32874286 66.24059286 68.90934643
+        # if mr > 48 and mg > 60 and mb > 62:
+        #     reward -= 200
+        #     print(f"\ncol, {reward}")
+
+
+        # cv2.imshow("obs", cv2.resize(obs, (200, 200)))
+        # cv2.waitKey(1)
+        obs = np.reshape(cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY), (350, 800))
         return obs, reward, done, info
 
     def reset(self):
         reset_race()
-        obs = np.reshape(get_car_from_image(get_window_image()), (350, 800))
+        obs = get_car_from_image(get_window_image())
+        obs = np.reshape(cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY), (350, 800))
         return obs
 
     def render(self):
@@ -100,7 +116,7 @@ class CustomEnv(gym.Env):
 
 
 mem = Pymem("SPEED2.EXE")
-actions_array = [A, SPACE, D]
+actions_array = [A, W, D]
 keypress_pause = 0.3
 speed_offsets = [0x42C]
 angle_offsets = [0x214, 0x20, 0x394, 0xC8C, 0x4, 0x0, 0x6C]
@@ -116,8 +132,8 @@ def get_window_image():
 
 def get_car_from_image(img):
     img = img[160:, :, :]   # cut top part
-    img = img[:350, :, :]   # cut bottom part --> img = (350, 800, 4)
-    img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY) # img = (350, 800)
+    img = img[:350, :, :]   # cut bottom part --> img = (350, 800, 3)
+    # img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY) # img = (350, 800)
     return img
 
 
@@ -153,7 +169,7 @@ def get_car_from_image(img):
 def control_car(chosen_action):
     for action in actions_array:
         ReleaseKey(action)
-    PressKey(W)
+    # PressKey(W)
     PressKey(actions_array[chosen_action])
     # print(print_action(actions_array[chosen_action]))
 
@@ -216,18 +232,23 @@ if __name__ == "__main__":
     env = CustomEnv()
     height, width = env.observation_space.shape
     actions = env.action_space.n
+
+    # obs, _, _, _ = env.step(1)
+
     # window = win32gui.FindWindow(None, "NFS Underground 2")
     # win32gui.SetForegroundWindow(window)
 
 
     model = build_model(width, height, actions)
+    model.summary()
     dqn = build_agent(model, actions)
     dqn.compile(Adam(1e-3))
 
-    dqn.fit(env, nb_steps=10000, visualize=False, verbose=1, nb_max_episode_steps=500)
-    dqn.save_weights("dqn", overwrite=True)
-    model.load_weights("dqn")
-    dqn.test(env, nb_max_episode_steps=3000, visualize=False, verbose=1)
+    dqn.fit(env, nb_steps=6000, visualize=False,
+            verbose=1, nb_max_episode_steps=300)
+    dqn.save_weights("./nfsug2-drift-nn/dqn", overwrite=True)
+    model.load_weights("./nfsug2-drift-nn/dqn")
+    dqn.test(env, nb_max_episode_steps=3000, visualize=False, verbose=0)
 
 
 
