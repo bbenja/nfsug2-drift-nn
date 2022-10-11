@@ -8,20 +8,40 @@ import cv2
 import numpy as np
 from re import sub
 from mss import mss
-from pymem import *
-from pymem.process import *
+from pymem import Pymem
+# from pymem.process import *
 from pymem.ptypes import RemotePointer
 import keyboard
 import win32gui
-from random import choice
 import gym
 from gym.spaces import Discrete, Box
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Flatten, Conv2D, GlobalAveragePooling2D
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import Dense, Flatten, Conv2D, GlobalAveragePooling2D, Dropout
 from tensorflow.keras.optimizers import Adam
 from rl.agents import DQNAgent
 from rl.policy import BoltzmannQPolicy, LinearAnnealedPolicy, EpsGreedyQPolicy
 from rl.memory import SequentialMemory
+from tensorflow.keras.regularizers import l2
+import matplotlib.pyplot as plt
+
+def build_pilotnet_model():
+    model = Sequential(name="PilotNet")
+    model.add(Conv2D(24, (5, 5), strides=(2, 2), activation='relu', input_shape=(66, 200, 3)))
+    model.add(Conv2D(36, (5, 5), strides=(2, 2), activation='relu'))
+    model.add(Conv2D(48, (5, 5), strides=(2, 2), activation='relu'))
+    model.add(Conv2D(64, (3, 3), activation='relu'))
+    model.add(Conv2D(64, (3, 3), activation='relu'))
+    model.add(Dropout(0.5))
+    model.add(Flatten())
+    model.add(Dense(100, activation='relu', kernel_regularizer=l2(1e-3)))
+    model.add(Dense(50, activation='relu', kernel_regularizer=l2(1e-3)))
+    model.add(Dense(10, activation='relu', kernel_regularizer=l2(1e-3)))
+    model.add(Dense(4, activation="softmax"))
+    # model.summary()
+    model.compile(loss='mean_squared_error',
+                  optimizer="adam",
+                  metrics=['mean_absolute_error', 'mean_squared_error'])
+    return model
 
 
 def build_model(w, h, actions):
@@ -44,10 +64,10 @@ def build_agent(model, actions):
     #                               value_max=50., value_min=-50.,
     #                               value_test=1., nb_steps=10000)
     policy = BoltzmannQPolicy()
-    memory = SequentialMemory(limit=1000, window_length=1)
+    memory = SequentialMemory(limit=10000, window_length=1)
     dqn = DQNAgent(model=model, policy=policy, memory=memory,
-                   nb_actions=actions, nb_steps_warmup=10000)
-                   # enable_dueling_network=True, dueling_type="avg")
+                   nb_actions=actions, nb_steps_warmup=10000,
+                   enable_dueling_network=True, dueling_type="avg")
     return dqn
 
 
@@ -140,7 +160,7 @@ class CustomEnv(gym.Env):
 
 
 mem = Pymem("SPEED2.EXE")
-actions_array = [A, W, D]
+actions_array = [A, W, D, S]
 keypress_pause = 0.3
 speed_offsets = [0x42C]
 angle_offsets = [0x214, 0x20, 0x394, 0xC8C, 0x4, 0x0, 0x6C]
@@ -251,29 +271,104 @@ def print_action(action):
     return actions_array[action]
 
 
+keys = []
+images_and_controls = []
 
 
 if __name__ == "__main__":
     env = CustomEnv()
     height, width = env.observation_space.shape
     actions = env.action_space.n
+    # env.reset()
+    #
+    # keyboard.hook(lambda x: keys.append(x.name))
+    # for idx in range(5000):
+    #     speed, angle = get_car_diag()
+    #     img = cv2.resize(get_car_from_image(get_window_image())[150:, :, :], (200, 66))
+    #     key = keys[-1]
+    #     images_and_controls.append([idx, img, key, speed, angle])
+    #     # cv2.imshow("frame", img)
+    #     # cv2.waitKey(1)
+    #     print(idx, key, speed, angle)
+    # keyboard.unhook_all()
+    # sleep(2)
+    # with open("./nfsug2-drift-nn/dataset/data.txt", "w") as f:
+    #     for idx, img, key, speed, angle in images_and_controls:
+    #         f.write(f"{idx},{key},{speed},{angle}\n")
+    #         cv2.imwrite(f"./nfsug2-drift-nn/dataset/{idx}.jpg", img)
 
-    # obs, _, _, _ = env.step(0)
+
 
     # window = win32gui.FindWindow(None, "NFS Underground 2")
     # win32gui.SetForegroundWindow(window)
 
+    ### LOAD AND TRAIN
+    # x, y = [], []
+    # with open("./nfsug2-drift-nn/dataset/data.txt", "r") as f:
+    #     for line in f:
+    #         idx = line.split(",")[0]
+    #         key = line.split(",")[1]
+    #         img = np.expand_dims(cv2.imread(f"./nfsug2-drift-nn/dataset/{idx}.jpg"), axis=0)
+    #         x.append(img)
+    #         if key == "left":
+    #             y.append([1, 0, 0, 0])
+    #         elif key == "up":
+    #             y.append([0, 1, 0, 0])
+    #         elif key == "right":
+    #             y.append([0, 0, 1, 0])
+    #         elif key == "down":
+    #             y.append([0, 0, 0, 1])
+    # x = np.reshape(x, (len(x), 66, 200, 3))
+    # y = np.reshape(y, (len(y), 4))
+    # model = build_pilotnet_model()
+    # model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"])
+    # history = model.fit(x, y, batch_size=64, epochs=20, validation_split=0.1)
+    # plt.plot(history.history["loss"], label="loss")
+    # plt.plot(history.history["val_loss"], label="val_loss)
+    # plt.legend()
+    # plt.show()
+    # print(model.evaluate(x, y, batch_size=1, verbose=1))
+    # model.save("./nfsug2-drift-nn/classification")
 
-    model = build_model(width, height, actions)
-    model.summary()
-    dqn = build_agent(model, actions)
-    dqn.compile(Adam(1e-3))
+    model = load_model("./nfsug2-drift-nn/classification")
 
-    dqn.fit(env, nb_steps=9000, visualize=False,
-            verbose=1, nb_max_episode_steps=300)
-    dqn.save_weights("./nfsug2-drift-nn/saves/dqn", overwrite=True)
-    model.load_weights("./nfsug2-drift-nn/saves/dqn")
-    dqn.test(env, nb_max_episode_steps=3000, visualize=False, verbose=0)
+    while True:
+        img = get_car_from_image(get_window_image())
+        cv2.imshow("frame", img)
+        cv2.waitKey(1)
+        img = cv2.resize(img, (200, 66))
+        img = np.expand_dims(img, axis=0)
+        action = np.argmax(model.predict(img))
+        print(action)
+        PressKey(actions_array[action])
+
+    # predicts = []
+    # for img in x:
+    #     predicts.append(model.predict(np.expand_dims(img, axis=0)))
+    #
+    # predicts = np.argmax(np.reshape(predicts, (len(predicts), 4)), axis=1)
+    # y = np.argmax(np.asarray(y), axis=1)
+    # # plt.hist(y, bins=4)
+    # # plt.show()
+    # plt.plot(y, label="gt")
+    # plt.plot(predicts, label="p", alpha=0.7)
+    # plt.legend()
+    # plt.show()
+
+
+
+
+    # model = build_model(width, height, actions)
+    # model.summary()
+    # dqn = build_agent(model, actions)
+    # dqn.compile(Adam(1e-3))
+    # ### RL TRAINING
+    # model.load_weights("./nfsug2-drift-nn/saves_first_lap/dqn")
+    # dqn.fit(env, nb_steps=36000, visualize=False,
+    #         verbose=1, nb_max_episode_steps=300)
+    # dqn.save_weights("./nfsug2-drift-nn/saves/dqn", overwrite=True)
+    # model.load_weights("./nfsug2-drift-nn/saves/dqn")
+    # dqn.test(env, nb_max_episode_steps=3000, visualize=False, verbose=0)
 
 
 
